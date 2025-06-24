@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Imprest-Cash Tracker</title>
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter font for better typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Basic styling for chart bars to ensure they are visible if overflow-x-auto is present */
+        .chart-bar {
+            background-color: theme('colors.blue.500'); /* Tailwind blue-500 */
+            border-radius: 2px 2px 0 0;
+            margin: 0 2px; /* Small gap between bars */
+            transition: height 0.3s ease-out;
+        }
+        .chart-container {
+            display: flex;
+            align-items: flex-end; /* Bars start from bottom */
+            justify-content: flex-start; /* Bars start from left */
+            overflow-x: auto; /* Allow horizontal scrolling if many bars */
+            height: 200px; /* Fixed height for the chart area */
+            padding: 10px;
+            border: 1px solid #e2e8f0; /* gray-200 */
+            border-radius: 0.5rem; /* rounded-lg */
+            background-color: white;
+        }
+        .chart-label {
+            font-size: 0.75rem; /* text-xs */
+            color: theme('colors.gray.600');
+            margin-top: 0.25rem;
+            text-align: center;
+            min-width: 40px; /* Ensure labels have enough space */
+        }
+        /* Rotate labels for better readability on x-axis if needed */
+        .rotate-45 {
+            transform: rotate(45deg);
+            transform-origin: top left;
+        }
+    </style>
+</head>
+<body>
+    <div id="root_office_imprest"></div>
+
+    <!-- React and ReactDOM CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX transformation in the browser (for development) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        // Helper function to get today's date in YYYY-MM-DD format
+        const getTodayDate = () => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            const day = today.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        // Main App Component, configured with props for customization
+        function App({ appTitle, themeColors, csvFilename }) {
+          const INITIAL_BALANCE = 20000; // Office rule: Initial balance is 20000
+
+          const [description, setDescription] = React.useState('');
+          const [amount, setAmount] = React.useState('');
+          const [billNo, setBillNo] = React.useState(''); // State for Bill No.
+          const [transactionDate, setTransactionDate] = React.useState(getTodayDate()); // New state for transaction date
+          const [expenses, setExpenses] = React.useState([]); // This will now store all transactions (expenses and income)
+          const [showSummary, setShowSummary] = React.useState(false); // Toggle between expense entry and summary
+          const [showCharts, setShowCharts] = React.useState(false); // Toggle chart visibility in summary
+          const [purposeSuggestions, setPurposeSuggestions] = React.useState([]); // New state for purpose suggestions
+
+          // --- Local Storage Hooks ---
+          // Use a unique key for each app instance based on csvFilename to avoid data collision
+          const expenseLocalStorageKey = `expenseTracker_expenses_${csvFilename}`;
+          const purposeSuggestionsLocalStorageKey = `expenseTracker_purpose_suggestions_${csvFilename}`;
+
+
+          // Function to process raw transactions and calculate running balance and Sl.No.
+          // This function now handles both 'expense' and 'income' types
+          const processTransactions = React.useCallback((rawTransactions) => {
+            // Sort by actual transaction timestamp in ascending order to calculate balance chronologically
+            const sortedTransactions = [...rawTransactions].sort((a, b) => a.transactionTimestamp - b.transactionTimestamp);
+            let currentBalance = INITIAL_BALANCE;
+            const processed = sortedTransactions.map((transaction, index) => {
+              if (transaction.type === 'expense') {
+                currentBalance -= transaction.amount;
+              } else if (transaction.type === 'income') {
+                currentBalance += transaction.amount;
+              }
+              return {
+                ...transaction,
+                slNo: index + 1, // Assign serial number based on sorted order
+                balance: currentBalance // Balance after this transaction
+              };
+            });
+            // Reverse to show most recent first in the display, but preserve slNo and balance
+            return processed.reverse();
+          }, []);
+
+
+          // Load transactions and purpose suggestions from local storage on initial render
+          React.useEffect(() => {
+            const storedTransactions = localStorage.getItem(expenseLocalStorageKey);
+            if (storedTransactions) {
+              try {
+                const rawTransactions = JSON.parse(storedTransactions);
+                setExpenses(processTransactions(rawTransactions));
+              } catch (e) {
+                console.error("Failed to parse stored expenses:", e);
+                setExpenses([]); // Reset if parsing fails
+              }
+            }
+
+            const storedPurposeSuggestions = localStorage.getItem(purposeSuggestionsLocalStorageKey);
+            if (storedPurposeSuggestions) {
+                try {
+                    setPurposeSuggestions(JSON.parse(storedPurposeSuggestions));
+                } catch (e) {
+                    console.error("Failed to parse stored purpose suggestions:", e);
+                    setPurposeSuggestions([]);
+                }
+            }
+          }, [expenseLocalStorageKey, purposeSuggestionsLocalStorageKey, processTransactions]);
+
+
+          // Save transactions to local storage whenever 'expenses' state changes
+          React.useEffect(() => {
+            // When saving, we need to save the raw transactions without slNo or dynamic balance
+            // so that processTransactions can correctly re-calculate on load.
+            // Map back to original structure, then reverse to chronological for consistent saving.
+            const rawTransactionsToSave = expenses.map(({ slNo, balance, ...rest }) => rest).reverse();
+            localStorage.setItem(expenseLocalStorageKey, JSON.stringify(rawTransactionsToSave));
+
+            // Update purpose suggestions from current expenses
+            const uniquePurposes = [...new Set(expenses.filter(e => e.type === 'expense').map(e => e.description))];
+            localStorage.setItem(purposeSuggestionsLocalStorageKey, JSON.stringify(uniquePurposes));
+            setPurposeSuggestions(uniquePurposes); // Update state as well
+          }, [expenses, expenseLocalStorageKey, purposeSuggestionsLocalStorageKey]);
+
+
+          // --- Handlers ---
+          const handleAddExpense = () => {
+            if (!description || !amount || parseFloat(amount) <= 0) {
+              alert('Please enter a description and a valid positive amount.');
+              return;
+            }
+
+            const newRawExpense = {
+              id: Date.now(), // Unique ID, based on entry time
+              description, // Purpose
+              amount: parseFloat(amount),
+              billNo,
+              transactionTimestamp: new Date(transactionDate).getTime(), // Use the selected date's timestamp
+              type: 'expense', // Mark as expense
+            };
+
+            // Get current raw transactions, add new one, then re-process all
+            const currentRawTransactions = expenses.map(({ slNo, balance, ...rest }) => rest).reverse();
+            setExpenses(processTransactions([...currentRawTransactions, newRawExpense]));
+
+            setDescription('');
+            setAmount('');
+            setBillNo('');
+            setTransactionDate(getTodayDate()); // Reset date to today after adding
+          };
+
+          const handleReplenish = () => {
+            const currentTotalBalance = expenses.length > 0 ? expenses[0].balance : INITIAL_BALANCE;
+            const amountToCredit = INITIAL_BALANCE - currentTotalBalance;
+
+            if (amountToCredit <= 0) {
+                alert("Balance is already at or above initial imprest amount. No replenishment needed.");
+                return;
+            }
+
+            const newRawIncome = {
+                id: Date.now(),
+                description: "Imprest Replenishment", // Fixed description for income
+                amount: amountToCredit,
+                billNo: '', // No bill number for replenishment
+                transactionTimestamp: Date.now(), // Use current time for replenishment entry
+                type: 'income', // Mark as income
+            };
+
+            // Get current raw transactions, add new income, then re-process all
+            const currentRawTransactions = expenses.map(({ slNo, balance, ...rest }) => rest).reverse();
+            setExpenses(processTransactions([...currentRawTransactions, newRawIncome]));
+
+            alert(`Imprest replenished by ₹${amountToCredit.toFixed(2)}. New balance is ₹${INITIAL_BALANCE.toFixed(2)}.`);
+          };
+
+
+          // --- CSV Export Function ---
+          const exportToCSV = () => {
+            if (expenses.length === 0) {
+                alert("No transactions to export!");
+                return;
+            }
+
+            // Headers specific to Office Imprest-Cash Tracker, including Type
+            const headers = ["Sl.No.", "Date", "Purpose", "Bill No.", "Debit (₹)", "Credit (₹)", "Balance (₹)"];
+            // Sort by Sl.No. for CSV export to maintain chronological order
+            const rows = [...expenses].reverse().map(transaction => {
+                const date = new Date(transaction.transactionTimestamp); // Use transactionTimestamp
+                const formattedDate = date.toLocaleDateString('en-GB', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit'
+                }); // DD/MM/YYYY
+                // Escape double quotes by doubling them, then wrap field in quotes if it contains a comma or double quote
+                const escapeCsvField = (field) => {
+                    if (typeof field !== 'string') field = String(field);
+                    const needsQuotes = field.includes(',') || field.includes('"') || field.includes('\n');
+                    const escapedField = field.replace(/"/g, '""');
+                    return needsQuotes ? `"${escapedField}"` : escapedField;
+                };
+
+                const debitAmount = transaction.type === 'expense' ? transaction.amount.toFixed(2) : '';
+                const creditAmount = transaction.type === 'income' ? transaction.amount.toFixed(2) : '';
+
+                return [
+                    transaction.slNo,
+                    formattedDate,
+                    escapeCsvField(transaction.description), // Purpose
+                    escapeCsvField(transaction.billNo || ''), // Bill No.
+                    debitAmount, // Amount for expense
+                    creditAmount, // Amount for income
+                    transaction.balance.toFixed(2) // Running balance
+                ].join(',');
+            });
+
+            const csvContent = [
+                headers.join(','),
+                ...rows
+            ].join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            if (link.download !== undefined) { // Feature detection for download attribute
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `${csvFilename}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                alert("Your browser does not support downloading files directly. Please copy the data from the table.");
+            }
+          };
+
+          // --- Summary Calculations (now based on total expenses only) ---
+          const monthlySummary = React.useMemo(() => {
+            const summary = {}; // { 'YYYY-MM': { totalExpense: 0 } }
+            expenses.filter(e => e.type === 'expense').forEach(expense => { // Only count expenses for summary
+              const date = new Date(expense.transactionTimestamp); // Use transactionTimestamp
+              const yearMonth = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+
+              if (!summary[yearMonth]) {
+                summary[yearMonth] = { totalExpense: 0 };
+              }
+              summary[yearMonth].totalExpense += expense.amount;
+            });
+
+            // Convert to an array for easy rendering and sort by month
+            return Object.entries(summary)
+              .map(([month, data]) => ({ month, total: data.totalExpense })) // Rename totalExpense to total for consistency
+              .sort((a, b) => b.month.localeCompare(a.month)); // Sort descending
+          }, [expenses]);
+
+          const yearlySummary = React.useMemo(() => {
+            const summary = {}; // { 'YYYY': { totalExpense: 0 } }
+            expenses.filter(e => e.type === 'expense').forEach(expense => { // Only count expenses for summary
+              const date = new Date(expense.transactionTimestamp); // Use transactionTimestamp
+              const year = date.getFullYear().toString();
+
+              if (!summary[year]) {
+                summary[year] = { totalExpense: 0 };
+              }
+              summary[year].totalExpense += expense.amount;
+            });
+
+            // Convert to an array for easy rendering and sort by year
+            return Object.entries(summary)
+              .map(([year, data]) => ({ year, total: data.totalExpense })) // Rename totalExpense to total for consistency
+              .sort((a, b) => b.year.localeCompare(a.year)); // Sort descending
+          }, [expenses]);
+
+
+          // Helper for generating chart data structure
+          const getChartData = (summaryData, type) => {
+            const chartLabels = summaryData.map(item => item[type]);
+            const chartDatasets = [{
+                label: 'Total Expenses',
+                data: summaryData.map(item => item.total),
+            }];
+            return { labels: chartLabels, datasets: chartDatasets };
+          };
+
+          const monthlyChartData = React.useMemo(() => getChartData(monthlySummary, 'month'), [monthlySummary]);
+          const yearlyChartData = React.useMemo(() => getChartData(yearlySummary, 'year'), [yearlySummary]);
+
+          // Calculate current balance for display (top-most expense's balance)
+          const currentBalance = expenses.length > 0 ? expenses[0].balance : INITIAL_BALANCE;
+
+          // --- Render Components ---
+          const renderExpenseForm = () => (
+            <>
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
+                  <input
+                    type="text"
+                    id="description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="e.g., Office Supplies, Client Lunch"
+                    list="purpose-suggestions" // Link to datalist
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition duration-200"
+                  />
+                  <datalist id="purpose-suggestions">
+                    {purposeSuggestions.map((purpose, index) => (
+                      <option key={index} value={purpose} />
+                    ))}
+                  </datalist>
+                </div>
+                 <div>
+                  <label htmlFor="billNo" className="block text-sm font-medium text-gray-700 mb-1">Bill No.</label>
+                  <input
+                    type="text"
+                    id="billNo"
+                    value={billNo}
+                    onChange={(e) => setBillNo(e.target.value)}
+                    placeholder="e.g., INV-2023-001"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition duration-200"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                  <input
+                    type="number"
+                    id="amount"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="e.g., 120.50"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition duration-200"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="transactionDate" className="block text-sm font-medium text-gray-700 mb-1">Date of Transaction</label>
+                  <input
+                    type="date"
+                    id="transactionDate"
+                    value={transactionDate}
+                    onChange={(e) => setTransactionDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition duration-200 bg-white"
+                  />
+                </div>
+                <button
+                  onClick={handleAddExpense}
+                  className={`w-full bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-200 shadow-md`}
+                >
+                  Add Expense
+                </button>
+                 <button
+                  onClick={handleReplenish}
+                  className={`w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-200 shadow-md mt-4`}
+                >
+                  Replenish Imprest (To ₹{INITIAL_BALANCE.toFixed(2)})
+                </button>
+              </div>
+
+              <div>
+                <h2 className="text-2xl font-bold text-green-700 mb-4">Recent Transactions</h2>
+                {expenses.length === 0 ? (
+                  <p className="text-gray-500 text-center">No transactions added yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg shadow-md">
+                    <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                      <thead className="bg-green-100">
+                        <tr>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Sl.No.</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Date</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Purpose</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Bill No.</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Debit (₹)</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Credit (₹)</th>
+                          <th className="py-2 px-3 border-b text-left text-sm font-semibold text-gray-700">Balance (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {expenses.map((transaction) => (
+                          <tr key={transaction.id} className="hover:bg-gray-50">
+                            <td className="py-2 px-3 border-b text-gray-800">{transaction.slNo}</td>
+                            <td className="py-2 px-3 border-b text-gray-800">
+                              {new Date(transaction.transactionTimestamp).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                            </td>
+                            <td className="py-2 px-3 border-b text-gray-800">{transaction.description}</td>
+                            <td className="py-2 px-3 border-b text-gray-800">{transaction.billNo || '-'}</td>
+                            <td className="py-2 px-3 border-b font-bold text-red-600">
+                              {transaction.type === 'expense' ? `₹${transaction.amount.toFixed(2)}` : '-'}
+                            </td>
+                            <td className="py-2 px-3 border-b font-bold text-green-600">
+                              {transaction.type === 'income' ? `₹${transaction.amount.toFixed(2)}` : '-'}
+                            </td>
+                            <td className="py-2 px-3 border-b font-bold text-blue-700">₹{transaction.balance.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          );
+
+          const renderSummaryReport = () => (
+            <>
+              <div className="mb-6 flex justify-center space-x-4">
+                <button
+                  onClick={() => setShowCharts(!showCharts)}
+                  className="bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-200 shadow-md"
+                >
+                  {showCharts ? 'Hide Charts' : 'Show Charts'}
+                </button>
+                <button
+                  onClick={exportToCSV}
+                  className="bg-green-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-200 shadow-md"
+                >
+                  Export to CSV
+                </button>
+              </div>
+
+              {/* Monthly Summary */}
+              <h2 className="text-2xl font-bold text-green-700 mb-3">Monthly Expense Summary</h2>
+              {monthlySummary.length === 0 ? (
+                <p className="text-gray-500 text-center mb-6">No monthly expense data available.</p>
+              ) : (
+                <div className="mb-8">
+                  <div className="overflow-x-auto rounded-lg shadow-md mb-4">
+                    <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                      <thead className="bg-green-100">
+                        <tr>
+                          <th className="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Month</th>
+                          <th className="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Total Expenses (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monthlySummary.map(item => (
+                          <tr key={item.month} className="hover:bg-gray-50">
+                            <td className="py-2 px-4 border-b text-gray-800">{item.month}</td>
+                            <td className="py-2 px-4 border-b font-bold text-red-600">₹{item.total.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {showCharts && monthlyChartData.labels.length > 0 && (
+                    <div className="bg-white p-4 rounded-lg shadow-md mt-4">
+                      <h3 className="text-xl font-bold text-green-600 mb-3 text-center">Monthly Spending Trends</h3>
+                      <div className="h-64 flex items-end overflow-x-auto p-2 border border-gray-200 rounded-lg">
+                        {/* Simple Bar Chart for Monthly */}
+                        {monthlyChartData.labels.map((month, index) => {
+                          const total = monthlySummary.find(s => s.month === month)?.total || 0;
+                          const maxHeight = 200; // Max height for a bar
+                          const maxAmount = Math.max(...monthlySummary.map(s => s.total));
+                          const barHeight = maxAmount > 0 ? (total / maxAmount) * maxHeight : 0;
+                          return (
+                            <div key={month} className="flex flex-col items-center justify-end mx-1" style={{ minWidth: '40px' }}>
+                              <div
+                                className="bg-blue-500 rounded-t-sm transition-all duration-300"
+                                style={{ height: `${barHeight}px`, width: '30px' }}
+                              ></div>
+                              <span className="text-xs text-gray-600 mt-1 rotate-45 transform origin-top-left">{month}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-center text-sm text-gray-500 mt-2">Total monthly expenses</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Yearly Summary */}
+              <h2 className="text-2xl font-bold text-green-700 mb-3">Yearly Expense Summary</h2>
+              {yearlySummary.length === 0 ? (
+                <p className="text-gray-500 text-center mb-6">No yearly expense data available.</p>
+              ) : (
+                <div className="mb-8">
+                  <div className="overflow-x-auto rounded-lg shadow-md mb-4">
+                    <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                      <thead className="bg-green-100">
+                        <tr>
+                          <th className="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Year</th>
+                          <th className="py-2 px-4 border-b text-left text-sm font-semibold text-gray-700">Total Expenses (₹)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {yearlySummary.map(item => (
+                          <tr key={item.year} className="hover:bg-gray-50">
+                            <td className="py-2 px-4 border-b text-gray-800">{item.year}</td>
+                            <td className="py-2 px-4 border-b font-bold text-red-600">₹{item.total.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {showCharts && yearlyChartData.labels.length > 0 && (
+                    <div className="bg-white p-4 rounded-lg shadow-md mt-4">
+                      <h3 className="text-xl font-bold text-green-600 mb-3 text-center">Yearly Spending Trends</h3>
+                      <div className="h-64 flex items-end overflow-x-auto p-2 border border-gray-200 rounded-lg">
+                        {/* Simple Bar Chart for Yearly */}
+                        {yearlyChartData.labels.map((year, index) => {
+                          const total = yearlySummary.find(s => s.year === year)?.total || 0;
+                          const maxHeight = 200; // Max height for a bar
+                          const maxAmount = Math.max(...yearlySummary.map(s => s.total));
+                          const barHeight = maxAmount > 0 ? (total / maxAmount) * maxHeight : 0;
+                          return (
+                            <div key={year} className="flex flex-col items-center justify-end mx-1" style={{ minWidth: '40px' }}>
+                              <div
+                                className="bg-green-500 rounded-t-sm transition-all duration-300"
+                                style={{ height: `${barHeight}px`, width: '30px' }}
+                              ></div>
+                              <span className="text-xs text-gray-600 mt-1">{year}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-center text-sm text-gray-500 mt-2">Total yearly expenses</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          );
+
+          return (
+            <div className={`min-h-screen bg-gradient-to-br ${themeColors.from} ${themeColors.to} flex items-center justify-center p-4 font-sans text-gray-800`}>
+              <div className="bg-white p-8 rounded-2xl shadow-xl w-full lg:max-w-4xl"> {/* Adjusted max-w-md to max-w-4xl for larger screens */}
+                <h1 className={`text-3xl font-extrabold text-center text-${themeColors.text} mb-2`}>{appTitle}</h1>
+                <p className={`text-xl font-bold text-center text-${themeColors.text} mb-6`}>
+                    Current Balance: ₹{currentBalance.toFixed(2)}
+                </p>
+
+                {/* Toggle between Expense Entry and Summary */}
+                <div className="flex justify-center space-x-4 mb-6">
+                  <button
+                    onClick={() => setShowSummary(false)}
+                    className={`px-6 py-2 rounded-lg font-semibold transition duration-200 ${
+                      !showSummary
+                        ? `bg-${themeColors.buttonBg} text-white shadow-md`
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    Add Expense
+                  </button>
+                  <button
+                    onClick={() => setShowSummary(true)}
+                    className={`px-6 py-2 rounded-lg font-semibold transition duration-200 ${
+                      showSummary
+                        ? `bg-${themeColors.buttonBg} text-white shadow-md`
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    Summary Report
+                  </button>
+                </div>
+
+                {/* Render content based on showSummary state */}
+                {showSummary ? renderSummaryReport() : renderExpenseForm()}
+              </div>
+            </div>
+          );
+        }
+
+        // Render the "Office Imprest-Cash Tracker" app
+        ReactDOM.render(
+          <App
+            appTitle="Office Imprest-Cash Tracker"
+            themeColors={{ from: 'from-green-500', to: 'to-teal-600', text: 'green-700', buttonBg: 'green-600' }}
+            csvFilename="office_imprest-cash_tracker"
+          />,
+          document.getElementById('root_office_imprest')
+        );
+    </script>
+</body>
+</html>
